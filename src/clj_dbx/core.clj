@@ -1,7 +1,9 @@
 (ns clj-dbx.core
-  (:require [clojure.edn :as edn]
+  (:require [clj-dbx.dsl-parser :as parser]
+            [clj-dbx.sql-builder :as builder]
+            [clojure.edn :as edn]
             [clojure.string :as str])
-  (:import (java.sql Connection DriverManager)))
+  (:import (java.sql Connection DriverManager ResultSet)))
 
 (defn lines [& lines]
   (str/join "\n" lines))
@@ -39,18 +41,26 @@
                                 "VALUES ('Joe Doe', 45, 70000, 3)"))
           (.execute stmt (lines "INSERT INTO employees (name, age, salary, num_children)"
                                 "VALUES ('John Smith', 40, 55000, 1 )"))
+          (.execute stmt (lines "INSERT INTO employees (name, age, salary, num_children)"
+                                "VALUES ('Joe O''Neill', 50, 65000, 3 )"))
           (.executeQuery stmt "SELECT * FROM employees")
-          (let [rs (.getResultSet stmt)]
-            (if (= ((fn yield []
-                      (when (.next rs)
-                        (cons {:id           (.getInt rs "id")
-                               :name         (.getString rs "name")
-                               :age          (.getInt rs "age")
-                               :salary       (.getInt rs "salary")
-                               :num-children (.getInt rs "num_children")}
-                              (yield)))))
-                   [{:id 1, :name "John Doe", :age 30, :salary 60000, :num-children 2}
-                    {:id 2, :name "Joe Doe", :age 45, :salary 70000, :num-children 3}
-                    {:id 3, :name "John Smith", :age 40, :salary 55000, :num-children 1}])
-              (println "Success")
-              (assert false "Failed to query db"))))))))
+          (let [yield (fn [^ResultSet rs]
+                        ((fn -yield []
+                           (when (.next rs)
+                             (cons {:id           (.getInt rs "id")
+                                    :name         (.getString rs "name")
+                                    :age          (.getInt rs "age")
+                                    :salary       (.getInt rs "salary")
+                                    :num-children (.getInt rs "num_children")}
+                                   (-yield))))))]
+            (assert (= (yield (.getResultSet stmt))
+                       [{:id 1, :name "John Doe", :age 30, :salary 60000, :num-children 2}
+                        {:id 2, :name "Joe Doe", :age 45, :salary 70000, :num-children 3}
+                        {:id 3, :name "John Smith", :age 40, :salary 55000, :num-children 1}
+                        {:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))
+            (.executeQuery stmt (builder/build-command (parser/parse-query "SELECT * FROM employees WHERE id = :id OR num_children = :num-children")
+                                                       {:id 1 :num-children 3}))
+            (assert (= (yield (.getResultSet stmt))
+                       [{:id 1, :name "John Doe", :age 30, :salary 60000, :num-children 2}
+                        {:id 2, :name "Joe Doe", :age 45, :salary 70000, :num-children 3}
+                        {:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))))))))
