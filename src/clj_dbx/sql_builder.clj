@@ -1,14 +1,16 @@
 (ns clj-dbx.sql-builder
   (:require [clojure.string :as str])
   (:import (clojure.lang ISeq Seqable)
-           (java.time Instant ZonedDateTime)
+           (java.text SimpleDateFormat)
+           (java.time ZonedDateTime)
            (java.time.format DateTimeFormatter)
-           (java.util Iterator UUID)))
+           (java.util Date Iterator UUID)))
 
 (defprotocol ToSql
   (-to-sql [this]))
 
 (def ^:private zdt-formatter (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss.SSSSSSSXXX"))
+(def ^:private date-formatter (SimpleDateFormat. "yyyy-MM-dd HH:mm:ss.SSS"))
 
 (defn- seq-to-sql [s] (str "(" (str/join "," (map -to-sql s)) ")"))
 
@@ -35,8 +37,8 @@
   (-to-sql [this] (-to-sql (iterator-seq this)))
   ZonedDateTime
   (-to-sql [this] (str "'" (.format this zdt-formatter) "'"))
-  Instant
-  (-to-sql [this] (str this)))
+  Date
+  (-to-sql [this] (str "'" (.format date-formatter this) "'")))
 
 (defn to-sql [^Object x]
   (if (-> x .getClass .isArray)

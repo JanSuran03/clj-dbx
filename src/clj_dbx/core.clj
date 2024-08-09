@@ -1,10 +1,13 @@
 (set! *warn-on-reflection* true)
 (ns clj-dbx.core
   (:require [clj-dbx.dsl-parser :as parser]
+            [clj-dbx.result-set-reader :as rs-reader]
             [clj-dbx.sql-builder :as builder]
             [clojure.edn :as edn]
+            [clojure.set :as set]
             [clojure.string :as str])
-  (:import (java.sql Connection DriverManager ResultSet)))
+  (:import (java.sql Connection DriverManager)
+           (java.util Date)))
 
 (defn lines [& lines]
   (str/join "\n" lines))
@@ -19,10 +22,17 @@
     (.executeUpdate stmt (str "CREATE DATABASE " db-name " OWNER " username))
     (println "Database created successfully")))
 
+(defn rand-time []
+  (Date. (long (rand (.getTime (Date.))))))
+
+(defn inbounds-rand-nth [coll index]
+  (nth coll (rem (Math/abs ^long index) (count coll))))
+
 (defn -main []
   (let [{{:user/keys [username password]} :user
          {db-name :database/name}         :database} (edn/read-string (slurp "config.edn"))
-        conn-config #:connection{:username username :password password :db-name db-name}]
+        conn-config #:connection{:username username :password password :db-name db-name}
+        times (vec (repeatedly 10 rand-time))]
     ;(create-database conn-config)
     (with-db-connection conn-config
       (fn [^Connection conn]
@@ -30,42 +40,27 @@
           (.execute stmt (lines "DROP TABLE IF EXISTS employees"))
           (.execute stmt (lines "CREATE TABLE IF NOT EXISTS employees"
                                 "("
-                                "  id SERIAL PRIMARY KEY,"
+                                "  id UUID PRIMARY KEY,"
                                 "  name VARCHAR(120) NOT NULL,"
                                 "  age INTEGER NOT NULL,"
                                 "  salary INTEGER NOT NULL,"
-                                "  num_children INTEGER NOT NULL"
+                                "  num_children INTEGER NOT NULL,"
+                                "  registered_at TIMESTAMP NOT NULL"
                                 ")"))
-          (.execute stmt (lines "INSERT INTO employees (name, age, salary, num_children)"
-                                "VALUES ('John Doe', 30, 60000, 2)"))
-          (.execute stmt (lines "INSERT INTO employees (name, age, salary, num_children)"
-                                "VALUES ('Joe Doe', 45, 70000, 3)"))
-          (.execute stmt (lines "INSERT INTO employees (name, age, salary, num_children)"
-                                "VALUES ('John Smith', 40, 55000, 1 )"))
-          (.execute stmt (lines "INSERT INTO employees (name, age, salary, num_children)"
-                                "VALUES ('Joe O''Neill', 50, 65000, 3 )"))
-          (.executeQuery stmt "SELECT * FROM employees")
-          (let [yield (fn [^ResultSet rs]
-                        ((fn -yield []
-                           (when (.next rs)
-                             (cons {:id           (.getInt rs "id")
-                                    :name         (.getString rs "name")
-                                    :age          (.getInt rs "age")
-                                    :salary       (.getInt rs "salary")
-                                    :num-children (.getInt rs "num_children")}
-                                   (-yield))))))]
-            (assert (= (yield (.getResultSet stmt))
-                       [{:id 1, :name "John Doe", :age 30, :salary 60000, :num-children 2}
-                        {:id 2, :name "Joe Doe", :age 45, :salary 70000, :num-children 3}
-                        {:id 3, :name "John Smith", :age 40, :salary 55000, :num-children 1}
-                        {:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))
-            (.executeQuery stmt (builder/build-command (parser/parse-query "SELECT * FROM employees WHERE id = :id OR num_children = :num-children")
-                                                       {:id 1 :num-children 3}))
-            (assert (= (yield (.getResultSet stmt))
-                       [{:id 1, :name "John Doe", :age 30, :salary 60000, :num-children 2}
-                        {:id 2, :name "Joe Doe", :age 45, :salary 70000, :num-children 3}
-                        {:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))
-            (.executeQuery stmt (builder/build-command (parser/parse-query "SELECT * FROM employees WHERE name = :name")
-                                                       {:name "Joe O'Neill"}))
-            (assert (= (yield (.getResultSet stmt))
-                       [{:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))))))))
+          (let [prep-sql (parser/parse-query (lines "INSERT INTO employees"
+                                                    "(id, name, age, salary, num_children, registered_at) VALUES"
+                                                    "(:id, :name, :age, :salary, :num-children, :registered-at)"))
+                employees (->> [{:name "John Doe" :age 30 :salary 60000 :num-children 2}
+                                {:name "Joe Doe" :age 45 :salary 70000 :num-children 3}
+                                {:name "John Smith" :age 40 :salary 55000 :num-children 1}
+                                {:name "Joe O'Neill" :age 50 :salary 65000 :num-children 3}]
+                               (map #(assoc % :registered-at (inbounds-rand-nth times (hash (:name %)))
+                                              :id (random-uuid))))
+                seq-apply-to-instant (fn [s] (map (fn [m] (update m :registered-at #(.toInstant ^Date %))) s))]
+            (doseq [employee employees]
+              (.execute stmt (builder/build-command prep-sql employee)))
+            (.executeQuery stmt "SELECT * FROM employees")
+            (assert (= (set (seq-apply-to-instant employees))
+                       (set (seq-apply-to-instant (map #(set/rename-keys % {:num_children  :num-children
+                                                                            :registered_at :registered-at})
+                                                       (rs-reader/read-result-set (.getResultSet stmt)))))))))))))
