@@ -1,3 +1,4 @@
+(set! *warn-on-reflection* true)
 (ns clj-dbx.core
   (:require [clj-dbx.dsl-parser :as parser]
             [clj-dbx.sql-builder :as builder]
@@ -63,4 +64,8 @@
             (assert (= (yield (.getResultSet stmt))
                        [{:id 1, :name "John Doe", :age 30, :salary 60000, :num-children 2}
                         {:id 2, :name "Joe Doe", :age 45, :salary 70000, :num-children 3}
-                        {:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))))))))
+                        {:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))
+            (.executeQuery stmt (builder/build-command (parser/parse-query "SELECT * FROM employees WHERE name = :name")
+                                                       {:name "Joe O'Neill"}))
+            (assert (= (yield (.getResultSet stmt))
+                       [{:id 4, :name "Joe O'Neill", :age 50, :salary 65000, :num-children 3}]))))))))
