@@ -53,7 +53,7 @@
 (defn build-command [parsed-template param-map]
   (str/join (map #(cond (string? %) %
                         (keyword? %) (if-let [value (get param-map %)]
-                                       (-to-sql value)
+                                       (to-sql value)
                                        (throw (ex-info "Keyword param not present" {:param-name %
                                                                                     :param-map  param-map}))))
                  parsed-template)))
