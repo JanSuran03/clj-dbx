@@ -32,7 +32,14 @@
   (let [{{:user/keys [username password]} :user
          {db-name :database/name}         :database} (edn/read-string (slurp "config.edn"))
         conn-config #:connection{:username username :password password :db-name db-name}
-        times (vec (repeatedly 10 rand-time))]
+        times (vec (repeatedly 10 rand-time))
+        employees (->> [{:name "John Doe" :age 30 :salary 60000 :num-children 2}
+                        {:name "Joe Doe" :age 45 :salary 70000 :num-children 3}
+                        {:name "John Smith" :age 40 :salary 55000 :num-children 1}
+                        {:name "Joe O'Neill" :age 50 :salary 65000 :num-children 3}]
+                       (map #(assoc % :registered-at (inbounds-rand-nth times (hash (:name %)))
+                                      :id (random-uuid))))
+        seq-apply-to-instant (fn [s] (map (fn [m] (update m :registered-at #(.toInstant ^Date %))) s))]
     ;(create-database conn-config)
     (with-db-connection conn-config
       (fn [^Connection conn]
@@ -49,16 +56,30 @@
                                 ")"))
           (let [prep-sql (parser/parse-query (lines "INSERT INTO employees"
                                                     "(id, name, age, salary, num_children, registered_at) VALUES"
-                                                    "(:id, :name, :age, :salary, :num-children, :registered-at)"))
-                employees (->> [{:name "John Doe" :age 30 :salary 60000 :num-children 2}
-                                {:name "Joe Doe" :age 45 :salary 70000 :num-children 3}
-                                {:name "John Smith" :age 40 :salary 55000 :num-children 1}
-                                {:name "Joe O'Neill" :age 50 :salary 65000 :num-children 3}]
-                               (map #(assoc % :registered-at (inbounds-rand-nth times (hash (:name %)))
-                                              :id (random-uuid))))
-                seq-apply-to-instant (fn [s] (map (fn [m] (update m :registered-at #(.toInstant ^Date %))) s))]
+                                                    "(:id, :name, :age, :salary, :num-children, :registered-at)"))]
             (doseq [employee employees]
               (.execute stmt (builder/build-command prep-sql employee)))
+            (.executeQuery stmt "SELECT * FROM employees")
+            (assert (= (set (seq-apply-to-instant employees))
+                       (set (seq-apply-to-instant (map #(set/rename-keys % {:num_children  :num-children
+                                                                            :registered_at :registered-at})
+                                                       (rs-reader/read-result-set (.getResultSet stmt)))))))))
+        (with-open [stmt (.createStatement conn)]
+          (.execute stmt (lines "DROP TABLE IF EXISTS employees"))
+          (.execute stmt (lines "CREATE TABLE IF NOT EXISTS employees"
+                                "("
+                                "  id UUID PRIMARY KEY,"
+                                "  name VARCHAR(120) NOT NULL,"
+                                "  age INTEGER NOT NULL,"
+                                "  salary INTEGER NOT NULL,"
+                                "  num_children INTEGER NOT NULL,"
+                                "  registered_at TIMESTAMP NOT NULL"
+                                ")"))
+          (let [seq-apply-to-instant (fn [s] (map (fn [m] (update m :registered-at #(.toInstant ^Date %))) s))]
+            (.execute stmt (builder/build-insert "employees"
+                                                 {:id           :id, :name :name, :age :age, :salary :salary,
+                                                  :num-children :num_children, :registered-at :registered_at}
+                                                 employees))
             (.executeQuery stmt "SELECT * FROM employees")
             (assert (= (set (seq-apply-to-instant employees))
                        (set (seq-apply-to-instant (map #(set/rename-keys % {:num_children  :num-children
